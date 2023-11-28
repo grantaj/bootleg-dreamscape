@@ -1,6 +1,7 @@
 #include "MIDIUSB.h"
+#include <SparkFun_MAG3110.h>
 
-
+MAG3110 mag = MAG3110(); 
 
 // MIDI ------------------------------------------------------------------------------
 // Note on & Note off
@@ -12,7 +13,7 @@
 
 #define MIDICC 0x0B
 #define MIDIMAXCC 127
-#define REPORTDELAY 500 
+#define REPORTDELAY 500
 
 
 void noteOn(byte channel, byte pitch, byte velocity) {
@@ -33,7 +34,7 @@ void controlChange(byte channel, byte control, byte value) {
 // HC-SR04 Ultrasonic sensor ---------------------------------------------------------
 #define TRIG 7
 #define ECHO 6
-#define MAX_RANGE 100
+#define MAX_RANGE 200
 
 void setupUltrasonicSensor(void) {
   pinMode(ECHO, INPUT);
@@ -58,7 +59,7 @@ float readUltrasonicSensor() {
   return distance;
 }
 
-// Light sensor
+// ARD2-3005 Light sensor
 #define LIGHTSENSOR A0
 #define MAX_LIGHT 1023
 
@@ -66,8 +67,28 @@ float readLightSensor() {
   return analogRead(LIGHTSENSOR);
 }
 
+// Thin film pressure sensor
+#define PRESSURESENSOR A1
+#define MAX_PRESSURE 1023
+
+float readPressureSensor() {
+  return analogRead(PRESSURESENSOR);
+}
+
+// MAG3110 Magnetometer
+
+
+void setupMagnetometerSensor() {
+  Wire.begin();             //setup I2C bus
+  //Wire.setClock(400000);    // I2C fast mode, 400kHz
+
+  mag.initialize(); //Initializes the mag sensor
+  mag.start();      //Puts the sensor in active mode
+}
+
+// Generic parameter conditioning for midi cc
 float normalise(float x, float max) {
-  return x/max;
+  return x / max;
 }
 
 int normaliseToMIDICC(float x, float max) {
@@ -75,25 +96,31 @@ int normaliseToMIDICC(float x, float max) {
 }
 
 float clip(float x) {
-  return max(0,min(1,x));
+  return max(0, min(1, x));
 }
 
 void setup() {
   Serial.begin(115200);
   setupUltrasonicSensor();
+  setupMagnetometerSensor();
 }
 
 void loop() {
 
   float range = 0;
   float light = 0;
+  float pressure = 0;
 
   range = readUltrasonicSensor();
   light = readLightSensor();
+  pressure = readPressureSensor();
 
   controlChange(0, 1, normaliseToMIDICC(range, MAX_RANGE));
   MidiUSB.flush();
-  controlChange(0, 2, normaliseToMIDICC(light, MAX_LIGHT));  
+  controlChange(0, 2, normaliseToMIDICC(light, MAX_LIGHT));
   MidiUSB.flush();
+  controlChange(0, 3, normaliseToMIDICC(pressure, MAX_PRESSURE));
+  MidiUSB.flush();
+
   delay(REPORTDELAY);
 }
