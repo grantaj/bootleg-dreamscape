@@ -1,7 +1,4 @@
 #include "MIDIUSB.h"
-#include <SparkFun_MAG3110.h>
-
-MAG3110 mag = MAG3110(); 
 
 // MIDI ------------------------------------------------------------------------------
 // Note on & Note off
@@ -75,15 +72,12 @@ float readPressureSensor() {
   return analogRead(PRESSURESENSOR);
 }
 
-// MAG3110 Magnetometer
+// Infrared Distance Sensor
+#define IRSENSOR A2
+#define MAX_IR 1023
 
-
-void setupMagnetometerSensor() {
-  Wire.begin();             //setup I2C bus
-  //Wire.setClock(400000);    // I2C fast mode, 400kHz
-
-  mag.initialize(); //Initializes the mag sensor
-  mag.start();      //Puts the sensor in active mode
+float readInfraRedSensor() {
+  return analogRead(IRSENSOR);
 }
 
 // Generic parameter conditioning for midi cc
@@ -102,7 +96,6 @@ float clip(float x) {
 void setup() {
   Serial.begin(115200);
   setupUltrasonicSensor();
-  setupMagnetometerSensor();
 }
 
 void loop() {
@@ -110,16 +103,22 @@ void loop() {
   float range = 0;
   float light = 0;
   float pressure = 0;
+  float range2 = 0;
 
   range = readUltrasonicSensor();
   light = readLightSensor();
   pressure = readPressureSensor();
+  range2 = readInfraRedSensor();
+
+  Serial.println(range2);
 
   controlChange(0, 1, normaliseToMIDICC(range, MAX_RANGE));
   MidiUSB.flush();
   controlChange(0, 2, normaliseToMIDICC(light, MAX_LIGHT));
   MidiUSB.flush();
   controlChange(0, 3, normaliseToMIDICC(pressure, MAX_PRESSURE));
+  MidiUSB.flush();
+  controlChange(0, 4, normaliseToMIDICC(range2, MAX_IR));
   MidiUSB.flush();
 
   delay(REPORTDELAY);
