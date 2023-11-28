@@ -1,9 +1,6 @@
 #include "MIDIUSB.h"
 
-// HC-SR04 Ultrasonic sensor ---------------------------------------------------------
-#define TRIG 7
-#define ECHO 6
-#define MAX_RANGE 100
+
 
 // MIDI ------------------------------------------------------------------------------
 // Note on & Note off
@@ -12,6 +9,11 @@
 // byte 1 - event bitwise OR channel (0-15) channel is reported to the user as 1-16.
 // byte 2 - note number (48 = middle C) or control channel (0-119)
 // byte 3 - velocity (64 = normal, 127 = fastest) or control value (0-127)
+
+#define MIDICC 0x0B
+#define MIDIMAXCC 127
+#define REPORTDELAY 500 
+
 
 void noteOn(byte channel, byte pitch, byte velocity) {
   midiEventPacket_t noteOn = { 0x09, 0x90 | channel, pitch, velocity };
@@ -28,18 +30,18 @@ void controlChange(byte channel, byte control, byte value) {
   MidiUSB.sendMIDI(event);
 }
 
-void setup() {
-  Serial.begin(115200);
-  usonicsetup();
-}
+// HC-SR04 Ultrasonic sensor ---------------------------------------------------------
+#define TRIG 7
+#define ECHO 6
+#define MAX_RANGE 100
 
-void usonicsetup(void) {
+void setupUltrasonicSensor(void) {
   pinMode(ECHO, INPUT);
   pinMode(TRIG, OUTPUT);
   digitalWrite(TRIG, LOW);
 }
 
-float usonic() {
+float readUltrasonicSensor() {
 
   float duration;
   float distance;
@@ -56,23 +58,42 @@ float usonic() {
   return distance;
 }
 
+// Light sensor
+#define LIGHTSENSOR A0
+#define MAX_LIGHT 1023
+
+float readLightSensor() {
+  return analogRead(LIGHTSENSOR);
+}
+
+float normalise(float x, float max) {
+  return x/max;
+}
+
+int normaliseToMIDICC(float x, float max) {
+  return MIDIMAXCC * clip(normalise(x, max));
+}
+
+float clip(float x) {
+  return max(0,min(1,x));
+}
+
+void setup() {
+  Serial.begin(115200);
+  setupUltrasonicSensor();
+}
+
 void loop() {
 
   float range = 0;
-  int normalised_range = 0;
-  long timeout = 1000;  // microseconds
+  float light = 0;
 
-  range = usonic();
-  Serial.print("Range: ");
-  Serial.print(range);
-  Serial.print("\n");
+  range = readUltrasonicSensor();
+  light = readLightSensor();
 
-  // MIDI CC is between 0 and 127
-  normalised_range = 127*max(0,min(range/MAX_RANGE, 1)); 
-
-  Serial.println("Sending control channel value");
-  controlChange(0, 10, normalised_range);  // Set the value of controller 10 on channel 0 
+  controlChange(0, 1, normaliseToMIDICC(range, MAX_RANGE));
   MidiUSB.flush();
-  delay(500);
- 
+  controlChange(0, 2, normaliseToMIDICC(light, MAX_LIGHT));  
+  MidiUSB.flush();
+  delay(REPORTDELAY);
 }
