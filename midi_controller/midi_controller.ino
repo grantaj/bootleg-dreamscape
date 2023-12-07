@@ -28,6 +28,38 @@ void controlChange(byte channel, byte control, byte value) {
   MidiUSB.sendMIDI(event);
 }
 
+// SR1230 Rotary encoder  -------------------------------------------------------------
+#define enc_dt 2
+#define enc_clk 3
+#define enc_button 4
+volatile int encoderValue = 63;
+volatile int encoderButton = 1;
+
+void setupRotaryEncoder(void) {
+  pinMode(enc_dt, INPUT_PULLUP);
+  pinMode(enc_clk, INPUT_PULLUP);
+  pinMode(enc_button, INPUT);
+
+  attachInterrupt(digitalPinToInterrupt(enc_clk), encoder, FALLING);
+  attachInterrupt(digitalPinToInterrupt(enc_button), button, CHANGE);
+}
+
+void button() {
+  encoderButton = digitalRead(enc_button);
+  Serial.println("button!");
+}
+
+
+void encoder() {
+  if (digitalRead(enc_clk) == digitalRead(enc_dt)) {
+    encoderValue++;
+  } else {
+    encoderValue--;
+  }
+
+  encoderValue = min(127, encoderValue);
+  encoderValue = max(0, encoderValue);
+}
 // HC-SR04 Ultrasonic sensor ---------------------------------------------------------
 #define TRIG 7
 #define ECHO 6
@@ -56,7 +88,7 @@ float readUltrasonicSensor() {
   return distance;
 }
 
-// ARD2-3005 Light sensor
+// ARD2-3005 Light sensor  ------------------------------------------------------------------------------
 #define LIGHTSENSOR A0
 #define MAX_LIGHT 1023
 
@@ -72,7 +104,7 @@ float readPressureSensor() {
   return analogRead(PRESSURESENSOR);
 }
 
-// Infrared Distance Sensor
+// Infrared Distance Sensor  ------------------------------------------------------------------------------
 #define IRSENSOR A2
 #define MAX_IR 1023
 
@@ -80,7 +112,7 @@ float readInfraRedSensor() {
   return analogRead(IRSENSOR);
 }
 
-// Generic parameter conditioning for midi cc
+// Generic parameter conditioning for midi cc  ------------------------------------------------------------------------------
 float normalise(float x, float max) {
   return x / max;
 }
@@ -96,6 +128,7 @@ float clip(float x) {
 void setup() {
   Serial.begin(115200);
   setupUltrasonicSensor();
+  setupRotaryEncoder();
 }
 
 void loop() {
@@ -110,7 +143,18 @@ void loop() {
   pressure = readPressureSensor();
   range2 = readInfraRedSensor();
 
-  Serial.println(range2);
+  Serial.print(range);
+  Serial.print("\t");
+  Serial.print(light);
+  Serial.print("\t");
+  Serial.print(pressure);
+  Serial.print("\t");
+  Serial.print(range2);
+  Serial.print("\t");
+  Serial.print(encoderValue);
+  Serial.print("\t");
+  Serial.print(encoderButton);
+  Serial.print("\n");
 
   controlChange(0, 1, normaliseToMIDICC(range, MAX_RANGE));
   MidiUSB.flush();
