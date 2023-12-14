@@ -1,4 +1,52 @@
 #include "MIDIUSB.h"
+#include <NewPing.h>
+#include "GP2Y0A02YK0F.h"
+#include <movingAvg.h>
+#include <DueTimer.h>
+
+// ----
+// Wrapper class for sensors
+// providing moving average and nornalisation methods
+
+class Sensor {
+public:
+  Sensor(unsigned long (*f)(), unsigned long low, unsigned long high, int filterLength)
+    : sensorFunction(f), filter(filterLength), rangeLow(low), rangeHigh(high), lastValue(0) {
+    filter.begin();
+  }
+
+  int read() {
+    int sensorValue = sensorFunction();
+    if (sensorValue > rangeLow && sensorValue <= rangeHigh) {
+      filter.reading(sensorValue);
+      return sensorValue;
+    }
+
+    return rangeLow;
+  }
+
+  int value() {
+    return lastValue = filter.getAvg();
+  }
+
+  uint16_t normalisedValue() {
+    lastValue = filter.getAvg();
+    unsigned long c = min(max(rangeLow, lastValue), rangeHigh);
+    return (((uint16_t)-1) * (c - rangeLow)) / (rangeHigh - rangeLow);
+  }
+
+  bool updated() {
+    return filter.getAvg() != lastValue;
+  }
+
+private:
+
+  unsigned long (*sensorFunction)();
+  movingAvg filter;
+  unsigned long rangeLow;
+  unsigned long rangeHigh;
+  unsigned long lastValue;
+};
 
 // MIDI ------------------------------------------------------------------------------
 // Note on & Note off
@@ -10,6 +58,7 @@
 
 #define MIDICC 0x0B
 #define MIDIMAXCC 127
+#define MIDIMAXPITCH 16383
 #define REPORTDELAY 500
 
 
@@ -28,11 +77,19 @@ void controlChange(byte channel, byte control, byte value) {
   MidiUSB.sendMIDI(event);
 }
 
+void pitchChange(byte channel, uint16_t value) {
+  byte low = value & 127;
+  byte high = (value >> 7) & 127;
+
+  midiEventPacket_t event = { 0x0E, 0xE0 | channel, low, high };
+  MidiUSB.sendMIDI(event);
+}
+
 // SR1230 Rotary encoder  -------------------------------------------------------------
 #define enc_dt 2
 #define enc_clk 3
 #define enc_button 4
-volatile int encoderValue = 63;
+volatile int encoderValue = 8192;
 volatile int encoderButton = 1;
 
 void setupRotaryEncoder(void) {
@@ -57,36 +114,25 @@ void encoder() {
     encoderValue--;
   }
 
-  encoderValue = min(127, encoderValue);
+  encoderValue = min(16383, encoderValue);
   encoderValue = max(0, encoderValue);
 }
 // HC-SR04 Ultrasonic sensor ---------------------------------------------------------
-#define TRIG 7
-#define ECHO 6
-#define MAX_RANGE 200
+#define TRIGGER_PIN 7
+#define ECHO_PIN 6
+#undef TRIGGER_WIDTH
+#define TRIGGER_WIDTH 10
+#define MIN_DISTANCE 0
+#define MAX_DISTANCE 100  // Maximum distance we want to ping for (in centimeters). Maximum sensor distance is rated at 400-500cm.
+#define FILTER_LENGTH 5
 
-void setupUltrasonicSensor(void) {
-  pinMode(ECHO, INPUT);
-  pinMode(TRIG, OUTPUT);
-  digitalWrite(TRIG, LOW);
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE);  // NewPing setup of pins and maximum distance.
+
+unsigned long readSonar() {
+  return sonar.ping_cm();
 }
 
-float readUltrasonicSensor() {
-
-  float duration;
-  float distance;
-
-  digitalWrite(TRIG, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG, LOW);
-
-  duration = pulseIn(ECHO, HIGH);
-  distance = (duration * .0343) / 2;
-
-  return distance;
-}
+Sensor sonarSensor(readSonar, MIN_DISTANCE, MAX_DISTANCE, FILTER_LENGTH);
 
 // ARD2-3005 Light sensor  ------------------------------------------------------------------------------
 #define LIGHTSENSOR A0
@@ -100,17 +146,23 @@ float readLightSensor() {
 #define PRESSURESENSOR A1
 #define MAX_PRESSURE 1023
 
-float readPressureSensor() {
+unsigned long readPressureSensor() {
   return analogRead(PRESSURESENSOR);
 }
 
+Sensor pressureSensor(readPressureSensor, 0, 1023, 5);
+
 // Infrared Distance Sensor  ------------------------------------------------------------------------------
 #define IRSENSOR A2
-#define MAX_IR 1023
+#define model 20150
 
-float readInfraRedSensor() {
-  return analogRead(IRSENSOR);
+GP2Y0A02YK0F ir(IRSENSOR);
+
+unsigned long readInfraredSensor() {
+  return ir.Ranging(_5V, CM);
 }
+
+Sensor infraredSensor(readInfraredSensor, 20, 50, 5);
 
 // Generic parameter conditioning for midi cc  ------------------------------------------------------------------------------
 float normalise(float x, float max) {
@@ -121,49 +173,65 @@ int normaliseToMIDICC(float x, float max) {
   return MIDIMAXCC * clip(normalise(x, max));
 }
 
+int normaliseToMIDIPitch(float x, float max) {
+  return MIDIMAXPITCH * clip(normalise(x, max));
+}
+
 float clip(float x) {
   return max(0, min(1, x));
 }
 
 void setup() {
   Serial.begin(115200);
-  setupUltrasonicSensor();
-  setupRotaryEncoder();
+
+  // timer interval is in microseconds
+  Timer3.attachInterrupt(readHandler);
+  Timer3.start(50e3);
+  Timer4.attachInterrupt(writeHandler);
+  Timer4.start(100e3);
+
+  //setupRotaryEncoder();
+}
+
+
+Sensor pitchSensor(sonarSensor);
+Sensor modWheelSensor(infraredSensor);
+
+volatile bool executeRead = false;
+volatile bool executeWrite = false;
+
+void readHandler() {
+  executeRead = true;
+}
+
+void writeHandler() {
+  executeWrite = true;
 }
 
 void loop() {
 
-  float range = 0;
-  float light = 0;
-  float pressure = 0;
-  float range2 = 0;
+  if (executeRead) {
+    pitchSensor.read();
+    modWheelSensor.read();
+    executeRead = false;
+  }
 
-  range = readUltrasonicSensor();
-  light = readLightSensor();
-  pressure = readPressureSensor();
-  range2 = readInfraRedSensor();
+  if (executeWrite) {
+    if (pitchSensor.updated()) {
+      uint16_t pitchValue = pitchSensor.normalisedValue() >> 2;
+      pitchValue = 16383 - pitchValue;
+      //Serial.print("pitch:\t");
+      //Serial.println(pitchSensor.value());
+      pitchChange(1, pitchValue);
+    }
 
-  Serial.print(range);
-  Serial.print("\t");
-  Serial.print(light);
-  Serial.print("\t");
-  Serial.print(pressure);
-  Serial.print("\t");
-  Serial.print(range2);
-  Serial.print("\t");
-  Serial.print(encoderValue);
-  Serial.print("\t");
-  Serial.print(encoderButton);
-  Serial.print("\n");
-
-  controlChange(0, 1, normaliseToMIDICC(range, MAX_RANGE));
-  MidiUSB.flush();
-  controlChange(0, 2, normaliseToMIDICC(light, MAX_LIGHT));
-  MidiUSB.flush();
-  controlChange(0, 3, normaliseToMIDICC(pressure, MAX_PRESSURE));
-  MidiUSB.flush();
-  controlChange(0, 4, normaliseToMIDICC(range2, MAX_IR));
-  MidiUSB.flush();
-
-  delay(REPORTDELAY);
+    if (modWheelSensor.updated()) {
+      byte modWheelValue = modWheelSensor.normalisedValue() >> 9;
+      modWheelValue = 127 - modWheelValue;
+      // Serial.print("mod:\t");
+      // Serial.println(modWheelSensor.value());
+      controlChange(1, 1, modWheelValue);
+    }
+    executeWrite = false;
+  }
 }
